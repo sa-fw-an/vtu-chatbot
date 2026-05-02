@@ -1,339 +1,521 @@
-import streamlit as st
-import requests
+"""VTU Diary Agent — Streamlit UI."""
+from __future__ import annotations
+
 import json
-import time
+
+import streamlit as st
 from openai import OpenAI
 
-# ============================================================================
-# ⚙️ CONFIGURATION (Endpoints)
-# ============================================================================
-VTU_LOGIN_URL = "https://vtuapi.internyet.in/api/v1/auth/login"
-VTU_APPLYS_URL = "https://vtuapi.internyet.in/api/v1/student/internship-applys?page=1&status=6"
-VTU_GET_URL = "https://vtuapi.internyet.in/api/v1/student/internship-diaries"
-VTU_POST_URL = "https://vtuapi.internyet.in/api/v1/student/internship-diaries/store"
+from agent import TOOLS, TOOLS_SCHEMA, build_system_message
+from config import init_session, reset_auth, reset_llm
 
-# ============================================================================
-# 🔐 VTU AUTH & SETUP FUNCTIONS
-# ============================================================================
-def login_to_vtu(email, password):
-    headers = {
-        "Origin": "https://vtu.internyet.in", 
-        "Content-Type": "application/json"
-    }
-    payload = {"email": email, "password": password}
-    
-    try:
-        response = requests.post(VTU_LOGIN_URL, json=payload, headers=headers)
-        if response.status_code == 200:
-            # 🔑 VTU stores the token in the cookies
-            cookies = response.cookies.get_dict()
-            token = cookies.get("access_token")
-            
-            if token:
-                return token
-            else:
-                # Fallback: manually parse Set-Cookie header
-                set_cookie_header = response.headers.get("Set-Cookie", "")
-                if "access_token=" in set_cookie_header:
-                    token_part = set_cookie_header.split("access_token=")[1]
-                    token = token_part.split(";")[0]
-                    return token
-                
-                st.error("Login succeeded, but could not find the access_token in the cookies.")
-                return None
-        else:
-            st.error(f"Login failed! Check credentials. ({response.status_code})")
-            return None
-    except Exception as e:
-        st.error(f"Network error: {e}")
-        return None
+st.set_page_config(
+    page_title="VTU Diary Agent",
+    page_icon=":material/edit_note:",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 
-def fetch_internship_id():
-    headers = {
-        "Origin": "https://vtu.internyet.in",
-        "Content-Type": "application/json",
-        "Cookie": f"access_token={st.session_state.vtu_token}"
-    }
-    try:
-        res = requests.get(VTU_APPLYS_URL, headers=headers)
-        if res.status_code == 200:
-            data = res.json()
-            # Navigate the JSON path to find the active internship
-            if "data" in data and "data" in data["data"]:
-                internships = data["data"]["data"]
-                if len(internships) > 0:
-                    # Grab the ID and Name of the first active internship
-                    internship_id = internships[0].get("internship_id")
-                    internship_name = internships[0].get("internship_details", {}).get("name", "Unknown Internship")
-                    
-                    st.session_state.internship_id = internship_id
-                    st.session_state.internship_name = internship_name
-                    return True
-        st.error("Could not find an active internship (Status 6) in your portal.")
-        return False
-    except Exception as e:
-        st.error(f"Failed to fetch internship details: {e}")
-        return False
+DEFAULT_MODEL = "gpt-5.4-nano"
 
-# ============================================================================
-# 🛠️ AGENT TOOLS
-# ============================================================================
-def get_auth_headers():
-    return {
-        "Origin": "https://vtu.internyet.in",
-        "Content-Type": "application/json",
-        "Cookie": f"access_token={st.session_state.vtu_token}"
-    }
-
-def get_existing_entries(args_json=None):
-    all_entries = []
-    current_page = 1
-    last_page = 1
-    
-    while current_page <= last_page:
-        res = requests.get(f"{VTU_GET_URL}?page={current_page}", headers=get_auth_headers())
-        if res.status_code != 200:
-            return json.dumps({"error": f"HTTP {res.status_code}"})
-            
-        data = res.json()
-        if "data" in data and "data" in data["data"]:
-            all_entries.extend(data["data"]["data"])
-            
-        last_page = data.get("data", {}).get("last_page", 1)
-        current_page += 1
-
-    # Save IDs to session state for updating existing dates later
-    st.session_state.existing_dates_map = {entry['date']: entry['id'] for entry in all_entries}
-    
-    simplified = [{"date": e['date'], "description": e['description'], "learnings": e['learnings']} for e in all_entries]
-    return json.dumps(simplified)
+init_session()
+client_vtu = st.session_state.vtu_client
 
 
-def submit_diary_entries(args_json):
-    entries = json.loads(args_json).get("entries", [])
-    results = []
-    
-    for entry in entries:
-        payload = {
-            "internship_id": st.session_state.internship_id, # Dynamically assigned!
-            "date": entry["date"],
-            "hours": entry["hours"],
-            "description": entry["description"],
-            "learnings": entry["learnings"],
-            "blockers": "", "links": "", "mood_slider": 5, "skill_ids": ["3"] # 3 is Python
-        }
-        
-        # Attach ID if we are overwriting an existing date
-        if entry["date"] in st.session_state.existing_dates_map:
-            payload["id"] = st.session_state.existing_dates_map[entry["date"]]
-            
-        res = requests.post(VTU_POST_URL, json=payload, headers=get_auth_headers())
-        if res.status_code in [200, 201]:
-            results.append({"date": entry["date"], "status": "Success"})
-        else:
-            results.append({"date": entry["date"], "status": f"Failed: {res.status_code}"})
-            
-        time.sleep(2) # Rate limit protection
-        
-    return json.dumps(results)
-
-# Map the tools
-available_functions = {
-    "get_existing_entries": get_existing_entries,
-    "submit_diary_entries": submit_diary_entries
+# ---------------------------------------------------------------------------
+# Theme palettes — applied via CSS variable overrides
+# ---------------------------------------------------------------------------
+THEMES = {
+    "dark": {
+        "bg":       "#0A0B0E",
+        "panel":    "#13141A",
+        "panel2":   "#191B22",
+        "border":   "#272932",
+        "text":     "#E6E7EB",
+        "muted":    "#8A8F9B",
+        "accent":   "#3B82F6",
+        "accenth":  "#1E3A8A",
+    },
+    "light": {
+        "bg":       "#FFFFFF",
+        "panel":    "#FAFAFB",
+        "panel2":   "#F2F3F5",
+        "border":   "#E4E4E7",
+        "text":     "#18181B",
+        "muted":    "#6B7280",
+        "accent":   "#2563EB",
+        "accenth":  "#DBEAFE",
+    },
 }
 
-tools_schema = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_existing_entries",
-            "description": "Fetches the student's existing diary entries. Use this to check filled dates or learn their writing style."
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "submit_diary_entries",
-            "description": "Submits or overwrites diary entries. ALWAYS skip Sundays.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "entries": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "date": {"type": "string", "description": "YYYY-MM-DD"},
-                                "hours": {"type": "number", "description": "Integer 2-4"},
-                                "description": {"type": "string"},
-                                "learnings": {"type": "string"}
-                            },
-                            "required": ["date", "hours", "description", "learnings"]
-                        }
-                    }
-                },
-                "required": ["entries"]
-            }
-        }
-    }
-]
 
-# ============================================================================
-# 🖥️ STREAMLIT UI
-# ============================================================================
-st.set_page_config(page_title="VTU Diary Agent", page_icon="🤖", layout="centered")
+def inject_styles(hide_sidebar: bool = False) -> None:
+    t = THEMES[st.session_state.theme_mode]
+    sidebar_css = (
+        'section[data-testid="stSidebar"], button[data-testid="stSidebarCollapseButton"], '
+        'button[data-testid="stSidebarCollapsedControl"], [data-testid="collapsedControl"] '
+        '{ display: none !important; }'
+    ) if hide_sidebar else ""
 
-# Initialize Session States
-if "llm_configured" not in st.session_state:
-    st.session_state.llm_configured = False
-if "api_key" not in st.session_state:
-    st.session_state.api_key = ""
-if "base_url" not in st.session_state:
-    st.session_state.base_url = "https://api.openai.com/v1"
-if "model_name" not in st.session_state:
-    st.session_state.model_name = "gpt-5.4-nano"
+    st.markdown(
+        f"""
+        <style>
+          :root {{
+            --vtu-bg: {t['bg']}; --vtu-panel: {t['panel']}; --vtu-panel2: {t['panel2']};
+            --vtu-border: {t['border']}; --vtu-text: {t['text']}; --vtu-muted: {t['muted']};
+            --vtu-accent: {t['accent']}; --vtu-accenth: {t['accenth']};
+          }}
+          html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"] {{
+            background: var(--vtu-bg) !important; color: var(--vtu-text) !important;
+          }}
+          [data-testid="stHeader"] {{ background: transparent !important; }}
+          .block-container {{ padding-top: 2rem; padding-bottom: 5.5rem; max-width: 980px; }}
 
-if "vtu_token" not in st.session_state:
-    st.session_state.vtu_token = None
-if "internship_id" not in st.session_state:
-    st.session_state.internship_id = None
-if "internship_name" not in st.session_state:
-    st.session_state.internship_name = ""
-if "existing_dates_map" not in st.session_state:
-    st.session_state.existing_dates_map = {}
-if "messages" not in st.session_state:
-    st.session_state.messages = [
-        {"role": "system", "content": "You are an autonomous AI Agent managing a VTU internship diary. Always use get_existing_entries to learn the user's style before generating entries for Python/GenAI/n8n. Skip Sundays."}
-    ]
+          section[data-testid="stSidebar"] {{
+            background: var(--vtu-panel) !important; border-right: 1px solid var(--vtu-border);
+          }}
+          section[data-testid="stSidebar"] .stButton button {{ width: 100%; }}
 
-# --- STEP 1: LLM CONFIGURATION SCREEN ---
-if not st.session_state.llm_configured:
-    st.title("⚙️ Configure AI Agent")
-    st.caption("Connect your AI Agent to an OpenAI-compatible endpoint.")
-    
-    with st.form("llm_form"):
-        api_key = st.text_input("API Key", type="password", placeholder="sk-...")
-        base_url = st.text_input("Base URL", value="https://api.openai.com/v1")
-        model_name = st.text_input("Model Name", value="gpt-5.4-nano")
-        submit_llm = st.form_submit_button("Save & Continue")
-        
-        if submit_llm:
-            if not api_key:
-                st.error("API Key is required!")
-            else:
-                st.session_state.api_key = api_key
-                st.session_state.base_url = base_url
-                st.session_state.model_name = model_name
-                st.session_state.llm_configured = True
-                st.success("LLM Configured!")
-                st.rerun()
+          /* Header */
+          .vtu-header {{
+            padding: 0 0 1rem 0; margin-bottom: 1.4rem;
+            border-bottom: 1px solid var(--vtu-border);
+          }}
+          .vtu-title {{
+            font-size: 1.4rem; font-weight: 600; letter-spacing: -0.015em;
+            color: var(--vtu-text); line-height: 1.2;
+          }}
+          .vtu-sub {{ font-size: 0.88rem; color: var(--vtu-muted); margin-top: 0.25rem; }}
+          .vtu-meta {{ margin-top: 0.55rem; }}
 
-# --- STEP 2: VTU LOGIN SCREEN ---
-elif not st.session_state.vtu_token:
-    st.title("🔐 VTU Portal Login")
-    st.caption("Login to your VTU portal so the agent can manage your diary.")
-    
-    with st.form("login_form"):
-        email = st.text_input("VTU Email / Username")
-        password = st.text_input("Password", type="password")
-        submit_login = st.form_submit_button("Login")
-        
-        if submit_login:
-            with st.spinner("Authenticating with VTU..."):
-                token = login_to_vtu(email, password)
-                if token:
-                    st.session_state.vtu_token = token
-                    # Automatically fetch their Internship ID
-                    success = fetch_internship_id()
-                    if success:
-                        st.success("Successfully logged in and found active internship!")
-                        time.sleep(1)
-                        st.rerun()
+          /* Tags */
+          .tag {{
+            display: inline-block; padding: 2px 9px; border-radius: 4px;
+            font-size: 0.72rem; letter-spacing: 0.02em;
+            border: 1px solid var(--vtu-border); background: var(--vtu-panel2);
+            color: var(--vtu-muted); margin-right: 6px;
+          }}
+          .tag.accent {{
+            color: var(--vtu-accent);
+            border-color: color-mix(in srgb, var(--vtu-accent) 35%, transparent);
+            background: color-mix(in srgb, var(--vtu-accent) 12%, transparent);
+          }}
 
-# --- STEP 3: CHATBOT SCREEN ---
-else:
-    # Initialize the OpenAI Client dynamically with the user's settings
-    client = OpenAI(
-        api_key=st.session_state.api_key,
-        base_url=st.session_state.base_url
+          /* Forms / chat */
+          div[data-testid="stForm"] {{
+            background: var(--vtu-panel); border: 1px solid var(--vtu-border);
+            border-radius: 10px; padding: 1.1rem 1.2rem;
+          }}
+          [data-testid="stChatMessage"] {{
+            background: var(--vtu-panel); border: 1px solid var(--vtu-border);
+            border-radius: 10px; padding: 0.7rem 0.95rem;
+          }}
+
+          /* Inputs */
+          .stTextInput input, .stSelectbox div[data-baseweb="select"] > div {{
+            background: var(--vtu-panel) !important; border-color: var(--vtu-border) !important;
+            color: var(--vtu-text) !important;
+          }}
+          .stButton button[kind="primary"] {{
+            background: var(--vtu-accent); border: 1px solid var(--vtu-accent); color: #FFFFFF;
+          }}
+          .stButton button[kind="primary"]:hover {{ filter: brightness(1.08); }}
+
+          /* Footer */
+          .vtu-footer {{
+            position: fixed; bottom: 0; left: 0; right: 0;
+            text-align: center; padding: 9px 0; font-size: 0.78rem;
+            color: var(--vtu-muted); background: var(--vtu-bg);
+            border-top: 1px solid var(--vtu-border); z-index: 50;
+          }}
+          .vtu-footer a {{ color: var(--vtu-accent); text-decoration: none; font-weight: 500; }}
+          .vtu-footer a:hover {{ text-decoration: underline; }}
+
+          {sidebar_css}
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
 
-    st.title("🤖 VTU Agentic Chatbot")
-    st.caption(f"Connected to: `{st.session_state.model_name}` | Managing: **{st.session_state.internship_name}**")
 
-    # Sidebar for logout / reset config
+# ---------------------------------------------------------------------------
+# Reusable UI fragments
+# ---------------------------------------------------------------------------
+def render_footer() -> None:
+    st.markdown(
+        '<div class="vtu-footer">Made by '
+        '<a href="https://safwansayeed.in" target="_blank" rel="noopener">Safwan Sayeed</a>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_header(title: str, subtitle: str = "", tags_html: str = "") -> None:
+    meta = f'<div class="vtu-meta">{tags_html}</div>' if tags_html else ""
+    st.markdown(
+        f"""
+        <div class="vtu-header">
+          <div class="vtu-title">{title}</div>
+          <div class="vtu-sub">{subtitle}</div>
+          {meta}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def theme_switcher(key: str = "theme_seg") -> None:
+    """Segmented control with material icons. Triggers rerun on change."""
+    cur = st.session_state.theme_mode
+    options = ["dark", "light"]
+    label_map = {"dark": ":material/dark_mode: Dark", "light": ":material/light_mode: Light"}
+    picked = st.segmented_control(
+        "Theme",
+        options=options,
+        default=cur,
+        format_func=lambda x: label_map[x],
+        key=key,
+        label_visibility="collapsed",
+    )
+    if picked and picked != cur:
+        st.session_state.theme_mode = picked
+        st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# STEP 1 — LLM CONFIG
+# ---------------------------------------------------------------------------
+def _validate_llm(api_key: str, base_url: str) -> tuple[bool, list[str], str]:
+    try:
+        oai = OpenAI(api_key=api_key, base_url=base_url)
+        page = oai.models.list()
+        ids = sorted({m.id for m in page.data}) if getattr(page, "data", None) else []
+        return True, ids, f"Connected. {len(ids)} models available."
+    except Exception as e:
+        return False, [], str(e)
+
+
+def render_llm_config() -> None:
+    inject_styles(hide_sidebar=True)
+
+    # Floating top-right theme switcher
+    top = st.container()
+    with top:
+        _, right = st.columns([6, 1])
+        with right:
+            theme_switcher("theme_seg_llm")
+
+    render_header(
+        "VTU Diary Agent",
+        "Connect an OpenAI-compatible endpoint to begin.",
+    )
+
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        api_key = st.text_input(
+            "API key", type="password", placeholder="sk-…",
+            value=st.session_state.api_key, key="_cfg_api_key",
+            icon=":material/key:",
+        )
+    with c2:
+        base_url = st.text_input(
+            "Base URL", value=st.session_state.base_url, key="_cfg_base_url",
+            icon=":material/link:",
+        )
+
+    col_v, col_r = st.columns([1, 1])
+    with col_v:
+        if st.button(
+            ":material/bolt: Validate connection",
+            type="primary", use_container_width=True,
+        ):
+            if not api_key.strip():
+                st.error("API key is required.")
+            else:
+                with st.status("Probing endpoint…", expanded=False) as s:
+                    ok, ids, msg = _validate_llm(
+                        api_key.strip(),
+                        base_url.strip() or "https://api.openai.com/v1",
+                    )
+                    if ok:
+                        st.session_state.api_key = api_key.strip()
+                        st.session_state.base_url = base_url.strip() or "https://api.openai.com/v1"
+                        st.session_state.available_models = ids
+                        st.session_state.llm_validated = True
+                        s.update(label=msg, state="complete")
+                    else:
+                        st.session_state.llm_validated = False
+                        s.update(label=f"Validation failed — {msg}", state="error")
+    with col_r:
+        if st.button(":material/restart_alt: Clear", use_container_width=True,
+                     disabled=not st.session_state.llm_validated):
+            reset_llm()
+            st.rerun()
+
+    if not st.session_state.llm_validated:
+        st.caption("Enter credentials, then validate to load the model list.")
+        return
+
+    st.markdown(
+        f'<div class="tag accent">Validated</div>'
+        f'<div class="tag">{len(st.session_state.available_models)} models</div>',
+        unsafe_allow_html=True,
+    )
+    st.write("")
+
+    options = list(st.session_state.available_models)
+    if DEFAULT_MODEL not in options:
+        options = [DEFAULT_MODEL] + options
+    default_idx = options.index(DEFAULT_MODEL) if DEFAULT_MODEL in options else 0
+
+    chosen = st.selectbox("Model", options=options, index=default_idx,
+                          help=f"Default: {DEFAULT_MODEL}")
+
+    if st.button(":material/arrow_forward: Continue",
+                 type="primary", use_container_width=True):
+        st.session_state.model_name = chosen or DEFAULT_MODEL
+        st.session_state.llm_configured = True
+        st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# STEP 2 — LOGIN
+# ---------------------------------------------------------------------------
+def render_login() -> None:
+    inject_styles(hide_sidebar=False)
+
     with st.sidebar:
-        st.subheader("Settings")
-        if st.button("Reset AI Configuration"):
-            st.session_state.llm_configured = False
-            st.rerun()
-        if st.button("Logout of VTU Portal"):
-            st.session_state.vtu_token = None
-            st.session_state.internship_id = None
+        st.markdown("##### Theme")
+        theme_switcher("theme_seg_login")
+        st.divider()
+        if st.button(":material/restart_alt: Reset LLM config"):
+            reset_llm()
             st.rerun()
 
-    # Display chat history
+    render_header(
+        "VTU Portal Login",
+        "Authenticate to your student account.",
+        tags_html=f'<span class="tag accent">{st.session_state.model_name}</span>',
+    )
+
+    with st.form("login_form", border=False):
+        email = st.text_input("Email", placeholder="you@example.com",
+                              icon=":material/mail:")
+        password = st.text_input("Password", type="password",
+                                 icon=":material/lock:")
+        submit = st.form_submit_button(
+            ":material/login: Login",
+            type="primary", use_container_width=True,
+        )
+        if submit:
+            with st.status("Authenticating…", expanded=False) as status:
+                ok, info = client_vtu.login(email.strip(), password)
+                if not ok:
+                    status.update(label=f"Login failed — {info}", state="error")
+                    return
+                status.update(label="Authenticated. Locating active internship…")
+                st.session_state.vtu_user_name = info
+                internship = client_vtu.fetch_active_internship()
+                if not internship:
+                    status.update(label="No active internship found.", state="error")
+                    return
+                st.session_state.internship_id = internship["internship_id"]
+                st.session_state.internship_name = internship["name"]
+                st.session_state.internship_company = internship["company"]
+                st.session_state.internship_type = internship["type"]
+                status.update(label="Ready.", state="complete", expanded=False)
+            st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# STEP 3 — CHAT
+# ---------------------------------------------------------------------------
+def render_sidebar() -> None:
+    with st.sidebar:
+        st.markdown(f"##### {st.session_state.vtu_user_name or 'Student'}")
+        st.caption(st.session_state.internship_name or "—")
+        if st.session_state.internship_company:
+            st.caption(st.session_state.internship_company)
+
+        st.divider()
+        st.markdown("##### Theme")
+        theme_switcher("theme_seg_chat")
+
+        st.divider()
+        st.markdown("##### Model")
+        st.code(st.session_state.model_name, language="text")
+        st.caption(st.session_state.base_url)
+
+        st.divider()
+        if st.button(":material/delete_sweep: Clear chat"):
+            st.session_state.messages = []
+            st.rerun()
+        if st.button(":material/restart_alt: Reset LLM"):
+            reset_llm()
+            st.rerun()
+        if st.button(":material/logout: Logout"):
+            reset_auth()
+            st.rerun()
+
+
+def render_chat_history() -> None:
     for msg in st.session_state.messages:
-        if msg["role"] in ["user", "assistant"] and msg.get("content"):
-            with st.chat_message(msg["role"]):
+        role = msg.get("role")
+        if role in ("user", "assistant") and msg.get("content"):
+            with st.chat_message(role):
                 st.markdown(msg["content"])
 
-    # User Input
-    if prompt := st.chat_input("What should I do with your diary today?"):
-        # Add user message to UI and history
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
 
-        # Agent Execution Loop
-        with st.chat_message("assistant"):
-            with st.spinner("Agent is thinking and executing tools..."):
-                is_thinking = True
-                
-                while is_thinking:
+def run_agent_turn(prompt: str) -> None:
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    oai = OpenAI(api_key=st.session_state.api_key, base_url=st.session_state.base_url)
+    convo = [build_system_message()] + st.session_state.messages
+
+    with st.chat_message("assistant"):
+        status_box = st.status("Thinking…", expanded=False)
+        is_thinking = True
+        steps = 0
+        max_steps = 8
+
+        while is_thinking and steps < max_steps:
+            steps += 1
+            try:
+                response = oai.chat.completions.create(
+                    model=st.session_state.model_name,
+                    temperature=0.4,
+                    messages=convo,
+                    tools=TOOLS_SCHEMA,
+                    tool_choice="auto",
+                )
+            except Exception as e:
+                status_box.update(label=f"LLM error: {e}", state="error")
+                st.session_state.messages.append(
+                    {"role": "assistant", "content": f"LLM error: `{e}`"}
+                )
+                return
+
+            assistant_msg = response.choices[0].message
+            msg_dict: dict = {"role": "assistant"}
+            if assistant_msg.content:
+                msg_dict["content"] = assistant_msg.content
+            if assistant_msg.tool_calls:
+                msg_dict["tool_calls"] = [
+                    {
+                        "id": tc.id, "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
+                    for tc in assistant_msg.tool_calls
+                ]
+            st.session_state.messages.append(msg_dict)
+            convo.append(msg_dict)
+
+            if not assistant_msg.tool_calls:
+                final = assistant_msg.content or "_(no response)_"
+                status_box.update(label="Done", state="complete", expanded=False)
+                st.markdown(final)
+                is_thinking = False
+                break
+
+            for tc in assistant_msg.tool_calls:
+                fname = tc.function.name
+                fargs = tc.function.arguments or "{}"
+                status_box.update(label=f"Calling {fname}", state="running", expanded=True)
+
+                if fname == "submit_diary_entries":
                     try:
-                        # Call OpenAI
-                        response = client.chat.completions.create(
-                            model=st.session_state.model_name,
-                            temperature=0.5,
-                            messages=st.session_state.messages,
-                            tools=tools_schema,
-                            tool_choice="auto"
-                        )
-                        
-                        assistant_msg = response.choices[0].message
-                        
-                        # Convert OpenAI object to dict for Streamlit session state
-                        msg_dict = {"role": "assistant"}
-                        if assistant_msg.content: msg_dict["content"] = assistant_msg.content
-                        if assistant_msg.tool_calls: 
-                            msg_dict["tool_calls"] = [{"id": t.id, "type": "function", "function": {"name": t.function.name, "arguments": t.function.arguments}} for t in assistant_msg.tool_calls]
-                        
-                        st.session_state.messages.append(msg_dict)
+                        n = len(json.loads(fargs).get("entries", []))
+                    except Exception:
+                        n = 0
+                    if n:
+                        st.session_state._submit_progress = st.progress(
+                            0.0, text=f"Submitting {n} entries…")
 
-                        # Handle Tool Calls
-                        if assistant_msg.tool_calls:
-                            for tool_call in assistant_msg.tool_calls:
-                                func_name = tool_call.function.name
-                                func_args = tool_call.function.arguments
-                                
-                                st.toast(f"🛠️ Executing: `{func_name}`")
-                                
-                                # Execute Python tool
-                                result = available_functions[func_name](func_args)
-                                
-                                st.session_state.messages.append({
-                                    "role": "tool",
-                                    "tool_call_id": tool_call.id,
-                                    "name": func_name,
-                                    "content": result
-                                })
-                        else:
-                            # Finished thinking, display final answer
-                            st.markdown(assistant_msg.content)
-                            is_thinking = False
-                    
+                func = TOOLS.get(fname)
+                if not func:
+                    result = json.dumps({"error": f"unknown tool {fname}"})
+                else:
+                    try:
+                        result = func(fargs)
                     except Exception as e:
-                        st.error(f"LLM Error: {e}")
-                        is_thinking = False
+                        result = json.dumps({"error": str(e)})
+
+                if st.session_state._submit_progress is not None:
+                    try:
+                        st.session_state._submit_progress.empty()
+                    except Exception:
+                        pass
+                    st.session_state._submit_progress = None
+
+                with status_box:
+                    try:
+                        parsed = json.loads(result)
+                        preview = parsed if isinstance(parsed, dict) else {"data": parsed}
+                        st.json(preview, expanded=False)
+                    except Exception:
+                        st.code(result[:1500], language="json")
+
+                tool_entry = {
+                    "role": "tool", "tool_call_id": tc.id,
+                    "name": fname, "content": result,
+                }
+                st.session_state.messages.append(tool_entry)
+                convo.append(tool_entry)
+
+        if steps >= max_steps:
+            status_box.update(label="Stopped: max tool-loop depth reached.", state="error")
+            st.session_state.messages.append(
+                {"role": "assistant", "content": "Stopped: max tool-loop depth reached."}
+            )
+
+
+def render_chat() -> None:
+    inject_styles(hide_sidebar=False)
+    render_sidebar()
+
+    tags = [f'<span class="tag accent">{st.session_state.model_name}</span>']
+    if st.session_state.internship_type:
+        tags.append(f'<span class="tag">{st.session_state.internship_type}</span>')
+
+    render_header(
+        "Diary Agent",
+        st.session_state.internship_name,
+        tags_html=" ".join(tags),
+    )
+
+    if not st.session_state.messages:
+        with st.expander("What you can ask", icon=":material/help:", expanded=True):
+            st.markdown(
+                """
+                - **Read** — *show me my entries between April 10 and April 20*
+                - **Submit known content** — *fill April 22: 3 hours, worked on auth, learned JWT flow*
+                - **Style fill** — *read my last 10 entries and fill the missing days in April matching that style*
+                - **Generate fresh** — *write 3 entries for April 27–29 about prompt engineering, 3 hours each*
+                - **Update** — *rewrite April 15 with: built REST endpoints, learned validation*
+                - **Skip weekends** — *fill April but skip Sundays*
+                """
+            )
+
+    render_chat_history()
+
+    if prompt := st.chat_input("What should I do with your diary?"):
+        run_agent_turn(prompt)
+        st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Router
+# ---------------------------------------------------------------------------
+if not st.session_state.llm_configured:
+    render_llm_config()
+elif not client_vtu.access_token or not st.session_state.internship_id:
+    render_login()
+else:
+    render_chat()
+
+render_footer()
