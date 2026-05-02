@@ -13,9 +13,6 @@ DEFAULTS = {
     "available_models": [],
     "llm_validated": False,
 
-    # UI
-    "theme_mode": "dark",
-
     # VTU auth + internship
     "vtu_client": None,
     "vtu_user_name": "",

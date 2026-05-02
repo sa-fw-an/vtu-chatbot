@@ -23,34 +23,9 @@ client_vtu = st.session_state.vtu_client
 
 
 # ---------------------------------------------------------------------------
-# Theme palettes — applied via CSS variable overrides
+# Dark-only theme. config.toml provides the base; this just polishes layout.
 # ---------------------------------------------------------------------------
-THEMES = {
-    "dark": {
-        "bg":       "#0A0B0E",
-        "panel":    "#13141A",
-        "panel2":   "#191B22",
-        "border":   "#272932",
-        "text":     "#E6E7EB",
-        "muted":    "#8A8F9B",
-        "accent":   "#3B82F6",
-        "accenth":  "#1E3A8A",
-    },
-    "light": {
-        "bg":       "#FFFFFF",
-        "panel":    "#FAFAFB",
-        "panel2":   "#F2F3F5",
-        "border":   "#E4E4E7",
-        "text":     "#18181B",
-        "muted":    "#6B7280",
-        "accent":   "#2563EB",
-        "accenth":  "#DBEAFE",
-    },
-}
-
-
 def inject_styles(hide_sidebar: bool = False) -> None:
-    t = THEMES[st.session_state.theme_mode]
     sidebar_css = (
         'section[data-testid="stSidebar"], button[data-testid="stSidebarCollapseButton"], '
         'button[data-testid="stSidebarCollapsedControl"], [data-testid="collapsedControl"] '
@@ -61,19 +36,17 @@ def inject_styles(hide_sidebar: bool = False) -> None:
         f"""
         <style>
           :root {{
-            --vtu-bg: {t['bg']}; --vtu-panel: {t['panel']}; --vtu-panel2: {t['panel2']};
-            --vtu-border: {t['border']}; --vtu-text: {t['text']}; --vtu-muted: {t['muted']};
-            --vtu-accent: {t['accent']}; --vtu-accenth: {t['accenth']};
+            --vtu-bg: #0A0B0E;
+            --vtu-panel: #13141A;
+            --vtu-panel2: #191B22;
+            --vtu-border: #272932;
+            --vtu-text: #E6E7EB;
+            --vtu-muted: #8A8F9B;
+            --vtu-accent: #3B82F6;
           }}
-          html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"] {{
-            background: var(--vtu-bg) !important; color: var(--vtu-text) !important;
-          }}
-          [data-testid="stHeader"] {{ background: transparent !important; }}
+          [data-testid="stHeader"] {{ background: transparent !important; border-bottom: none !important; }}
           .block-container {{ padding-top: 2rem; padding-bottom: 5.5rem; max-width: 980px; }}
 
-          section[data-testid="stSidebar"] {{
-            background: var(--vtu-panel) !important; border-right: 1px solid var(--vtu-border);
-          }}
           section[data-testid="stSidebar"] .stButton button {{ width: 100%; }}
 
           /* Header */
@@ -97,8 +70,8 @@ def inject_styles(hide_sidebar: bool = False) -> None:
           }}
           .tag.accent {{
             color: var(--vtu-accent);
-            border-color: color-mix(in srgb, var(--vtu-accent) 35%, transparent);
-            background: color-mix(in srgb, var(--vtu-accent) 12%, transparent);
+            border-color: rgba(59,130,246,0.4);
+            background: rgba(59,130,246,0.12);
           }}
 
           /* Forms / chat */
@@ -111,25 +84,35 @@ def inject_styles(hide_sidebar: bool = False) -> None:
             border-radius: 10px; padding: 0.7rem 0.95rem;
           }}
 
-          /* Inputs */
-          .stTextInput input, .stSelectbox div[data-baseweb="select"] > div {{
-            background: var(--vtu-panel) !important; border-color: var(--vtu-border) !important;
-            color: var(--vtu-text) !important;
+          /* Primary button white text (icons too) */
+          .stButton button[kind="primary"],
+          .stFormSubmitButton button[kind="primary"] {{
+            background: var(--vtu-accent) !important;
+            border: 1px solid var(--vtu-accent) !important;
+            color: #FFFFFF !important;
           }}
-          .stButton button[kind="primary"] {{
-            background: var(--vtu-accent); border: 1px solid var(--vtu-accent); color: #FFFFFF;
+          .stButton button[kind="primary"] *,
+          .stFormSubmitButton button[kind="primary"] * {{
+            color: #FFFFFF !important; fill: #FFFFFF !important;
           }}
-          .stButton button[kind="primary"]:hover {{ filter: brightness(1.08); }}
+          .stButton button[kind="primary"]:hover,
+          .stFormSubmitButton button[kind="primary"]:hover {{ filter: brightness(1.08); }}
 
-          /* Footer */
+          /* Footer — sits above the chat input */
           .vtu-footer {{
             position: fixed; bottom: 0; left: 0; right: 0;
-            text-align: center; padding: 9px 0; font-size: 0.78rem;
+            text-align: center; padding: 8px 0; font-size: 0.78rem;
             color: var(--vtu-muted); background: var(--vtu-bg);
-            border-top: 1px solid var(--vtu-border); z-index: 50;
+            border-top: 1px solid var(--vtu-border); z-index: 9999;
           }}
           .vtu-footer a {{ color: var(--vtu-accent); text-decoration: none; font-weight: 500; }}
           .vtu-footer a:hover {{ text-decoration: underline; }}
+
+          /* Lift Streamlit's bottom region (chat_input lives here) so the
+             footer is fully visible underneath it. */
+          [data-testid="stBottom"], [data-testid="stBottomBlockContainer"] {{
+            padding-bottom: 34px !important;
+          }}
 
           {sidebar_css}
         </style>
@@ -143,7 +126,7 @@ def inject_styles(hide_sidebar: bool = False) -> None:
 # ---------------------------------------------------------------------------
 def render_footer() -> None:
     st.markdown(
-        '<div class="vtu-footer">Made by '
+        '<div class="vtu-footer">Made By '
         '<a href="https://safwansayeed.in" target="_blank" rel="noopener">Safwan Sayeed</a>'
         '</div>',
         unsafe_allow_html=True,
@@ -164,24 +147,6 @@ def render_header(title: str, subtitle: str = "", tags_html: str = "") -> None:
     )
 
 
-def theme_switcher(key: str = "theme_seg") -> None:
-    """Segmented control with material icons. Triggers rerun on change."""
-    cur = st.session_state.theme_mode
-    options = ["dark", "light"]
-    label_map = {"dark": ":material/dark_mode: Dark", "light": ":material/light_mode: Light"}
-    picked = st.segmented_control(
-        "Theme",
-        options=options,
-        default=cur,
-        format_func=lambda x: label_map[x],
-        key=key,
-        label_visibility="collapsed",
-    )
-    if picked and picked != cur:
-        st.session_state.theme_mode = picked
-        st.rerun()
-
-
 # ---------------------------------------------------------------------------
 # STEP 1 — LLM CONFIG
 # ---------------------------------------------------------------------------
@@ -198,13 +163,6 @@ def _validate_llm(api_key: str, base_url: str) -> tuple[bool, list[str], str]:
 def render_llm_config() -> None:
     inject_styles(hide_sidebar=True)
 
-    # Floating top-right theme switcher
-    top = st.container()
-    with top:
-        _, right = st.columns([6, 1])
-        with right:
-            theme_switcher("theme_seg_llm")
-
     render_header(
         "VTU Diary Agent",
         "Connect an OpenAI-compatible endpoint to begin.",
@@ -215,12 +173,10 @@ def render_llm_config() -> None:
         api_key = st.text_input(
             "API key", type="password", placeholder="sk-…",
             value=st.session_state.api_key, key="_cfg_api_key",
-            icon=":material/key:",
         )
     with c2:
         base_url = st.text_input(
             "Base URL", value=st.session_state.base_url, key="_cfg_base_url",
-            icon=":material/link:",
         )
 
     col_v, col_r = st.columns([1, 1])
@@ -285,9 +241,6 @@ def render_login() -> None:
     inject_styles(hide_sidebar=False)
 
     with st.sidebar:
-        st.markdown("##### Theme")
-        theme_switcher("theme_seg_login")
-        st.divider()
         if st.button(":material/restart_alt: Reset LLM config"):
             reset_llm()
             st.rerun()
@@ -299,10 +252,8 @@ def render_login() -> None:
     )
 
     with st.form("login_form", border=False):
-        email = st.text_input("Email", placeholder="you@example.com",
-                              icon=":material/mail:")
-        password = st.text_input("Password", type="password",
-                                 icon=":material/lock:")
+        email = st.text_input("Email", placeholder="you@example.com")
+        password = st.text_input("Password", type="password")
         submit = st.form_submit_button(
             ":material/login: Login",
             type="primary", use_container_width=True,
@@ -332,21 +283,73 @@ def render_login() -> None:
 # ---------------------------------------------------------------------------
 def render_sidebar() -> None:
     with st.sidebar:
-        st.markdown(f"##### {st.session_state.vtu_user_name or 'Student'}")
-        st.caption(st.session_state.internship_name or "—")
+        st.markdown(
+            f"##### :material/person: {st.session_state.vtu_user_name or 'Student'}"
+        )
+        st.caption(
+            f":material/work: {st.session_state.internship_name or '—'}"
+        )
         if st.session_state.internship_company:
-            st.caption(st.session_state.internship_company)
+            st.caption(
+                f":material/apartment: {st.session_state.internship_company}"
+            )
 
         st.divider()
-        st.markdown("##### Theme")
-        theme_switcher("theme_seg_chat")
+        with st.expander(
+            f":material/smart_toy: {st.session_state.model_name}",
+            expanded=False,
+        ):
+            st.caption(st.session_state.base_url)
+
+            new_url = st.text_input(
+                "Base URL",
+                value=st.session_state.base_url,
+                key="_sb_base_url",
+            )
+            new_key = st.text_input(
+                "API key",
+                type="password",
+                placeholder="leave blank to keep current",
+                key="_sb_api_key",
+            )
+
+            if st.button(
+                ":material/bolt: Re-validate",
+                key="_sb_revalidate",
+                use_container_width=True,
+            ):
+                effective_key = new_key.strip() or st.session_state.api_key
+                effective_url = new_url.strip() or st.session_state.base_url
+                with st.status("Probing endpoint…", expanded=False) as s:
+                    ok, ids, msg = _validate_llm(effective_key, effective_url)
+                    if ok:
+                        st.session_state.api_key = effective_key
+                        st.session_state.base_url = effective_url
+                        st.session_state.available_models = ids
+                        s.update(label=msg, state="complete")
+                        st.rerun()
+                    else:
+                        s.update(label=f"Failed — {msg}", state="error")
+
+            options = list(st.session_state.available_models) or [st.session_state.model_name]
+            if DEFAULT_MODEL not in options:
+                options = [DEFAULT_MODEL] + options
+            try:
+                idx = options.index(st.session_state.model_name)
+            except ValueError:
+                idx = 0
+            picked = st.selectbox(
+                "Model",
+                options=options,
+                index=idx,
+                key="_sb_model",
+            )
+            if picked and picked != st.session_state.model_name:
+                st.session_state.model_name = picked
+                st.rerun()
 
         st.divider()
-        st.markdown("##### Model")
-        st.code(st.session_state.model_name, language="text")
-        st.caption(st.session_state.base_url)
-
-        st.divider()
+        st.markdown("##### :material/tune: Session")
         if st.button(":material/delete_sweep: Clear chat"):
             st.session_state.messages = []
             st.rerun()
