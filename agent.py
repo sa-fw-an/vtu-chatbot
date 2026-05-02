@@ -3,15 +3,24 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
 from datetime import date, datetime
 from typing import Any, Callable
 
 import streamlit as st
 
+try:
+    from streamlit.runtime.scripting.script_run_context import add_script_run_ctx
+except ImportError:  # pragma: no cover — older streamlit fallback
+    def add_script_run_ctx(thread):  # type: ignore[misc]
+        return thread
+
 from vtu_client import VTUClient
 
 HOURS_CAP = 12.0
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+DIARY_CACHE_TTL = 300.0  # seconds — invalidated on successful submit
 
 
 # ---------------------------------------------------------------------------
@@ -80,7 +89,59 @@ def tool_list_skills(_args: str = "") -> str:
     return json.dumps([{"id": s["id"], "name": s["name"]} for s in skills])
 
 
-# ---------- Tool: get_existing_entries ----------
+# ---------- Diary cache + background prefetch ----------
+def start_prefetch_diaries() -> None:
+    """Kick off a background fetch of all diary pages immediately after login.
+    By the time the user types their first message the cache is warm
+    (or the worker is mid-flight, in which case _get_diaries_cached waits)."""
+    if st.session_state.get("_prefetch_event") is not None:
+        return
+    if st.session_state.get("_diaries_cache"):
+        return  # already cached
+
+    evt = threading.Event()
+    st.session_state._prefetch_event = evt
+    client = st.session_state.vtu_client
+    sess = st.session_state  # safe to capture; Streamlit session_state is per-session
+
+    def _work() -> None:
+        try:
+            entries = client.list_all_diaries()
+            sess["_diaries_cache"] = {"ts": time.time(), "entries": entries}
+        except Exception:
+            pass
+        finally:
+            evt.set()
+
+    t = threading.Thread(target=_work, daemon=True, name="vtu-prefetch")
+    add_script_run_ctx(t)
+    t.start()
+
+
+def _get_diaries_cached() -> list[dict]:
+    cache = st.session_state.get("_diaries_cache")
+    now = time.time()
+    if cache and now - cache.get("ts", 0) < DIARY_CACHE_TTL:
+        return cache["entries"]
+
+    # If a prefetch is mid-flight, wait for it instead of duplicating work
+    evt: threading.Event | None = st.session_state.get("_prefetch_event")
+    if evt is not None and not evt.is_set():
+        evt.wait(timeout=180)
+        cache = st.session_state.get("_diaries_cache")
+        if cache:
+            return cache["entries"]
+
+    entries = _client().list_all_diaries()
+    st.session_state._diaries_cache = {"ts": now, "entries": entries}
+    return entries
+
+
+def _invalidate_diary_cache() -> None:
+    st.session_state.pop("_diaries_cache", None)
+    st.session_state.pop("_prefetch_event", None)
+
+
 def tool_get_existing_entries(args_json: str) -> str:
     try:
         args = json.loads(args_json) if args_json else {}
@@ -89,7 +150,7 @@ def tool_get_existing_entries(args_json: str) -> str:
     start = args.get("start_date")
     end = args.get("end_date")
 
-    entries = _client().list_all_diaries()
+    entries = _get_diaries_cached()
     st.session_state.existing_dates_map = {e["date"]: e["id"] for e in entries}
 
     def in_range(d: str) -> bool:
@@ -222,6 +283,8 @@ def tool_submit_diary_entries(args_json: str) -> str:
         if progress:
             progress.progress((i + 1) / len(entries), text=f"{d} — {results[-1]['status']}")
 
+    if any(r["status"] == "success" for r in results):
+        _invalidate_diary_cache()
     return json.dumps({"results": results, "total": len(results),
                        "successes": sum(1 for r in results if r["status"] == "success")})
 

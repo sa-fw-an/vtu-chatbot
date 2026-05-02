@@ -1,6 +1,8 @@
 """VTU portal HTTP client. Handles auth, refresh, and diary CRUD."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 import requests
 from typing import Any
 
@@ -131,12 +133,20 @@ class VTUClient:
         return r.json().get("data", {})
 
     def list_all_diaries(self) -> list[dict]:
-        page, last_page, all_entries = 1, 1, []
-        while page <= last_page:
-            data = self.list_diaries(page)
-            all_entries.extend(data.get("data", []) or [])
-            last_page = data.get("last_page", 1)
-            page += 1
+        """Fetch every diary page. Page 1 first to learn last_page, then
+        pages 2..N in parallel so total time is ~one round-trip, not N."""
+        first = self.list_diaries(1)
+        all_entries: list[dict] = list(first.get("data", []) or [])
+        last_page = first.get("last_page", 1)
+        if last_page <= 1:
+            return all_entries
+
+        # Server is ratelimited at 60/min. 16 concurrent is well within budget
+        # and keeps wall-time at ~max(per-page latency) regardless of page count.
+        with ThreadPoolExecutor(max_workers=min(16, last_page - 1)) as ex:
+            results = list(ex.map(self.list_diaries, range(2, last_page + 1)))
+        for d in results:
+            all_entries.extend(d.get("data", []) or [])
         return all_entries
 
     def get_entry(self, entry_id: int) -> dict | None:

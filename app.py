@@ -6,7 +6,7 @@ import json
 import streamlit as st
 from openai import OpenAI
 
-from agent import TOOLS, TOOLS_SCHEMA, build_system_message
+from agent import TOOLS, TOOLS_SCHEMA, build_system_message, start_prefetch_diaries
 from config import init_session, reset_auth, reset_llm
 
 st.set_page_config(
@@ -275,6 +275,9 @@ def render_login() -> None:
                 st.session_state.internship_company = internship["company"]
                 st.session_state.internship_type = internship["type"]
                 status.update(label="Ready.", state="complete", expanded=False)
+            # Warm up the diary cache in the background so the user's first
+            # read query doesn't pay the full pagination cost.
+            start_prefetch_diaries()
             st.rerun()
 
 

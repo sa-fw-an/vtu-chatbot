@@ -51,6 +51,8 @@ def reset_auth() -> None:
     st.session_state.internship_type = ""
     st.session_state.existing_dates_map = {}
     st.session_state.messages = []
+    st.session_state.pop("_diaries_cache", None)
+    st.session_state.pop("_prefetch_event", None)
 
 
 def reset_llm() -> None:
