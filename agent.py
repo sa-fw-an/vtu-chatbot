@@ -11,10 +11,14 @@ from typing import Any, Callable
 import streamlit as st
 
 try:
-    from streamlit.runtime.scripting.script_run_context import add_script_run_ctx
-except ImportError:  # pragma: no cover — older streamlit fallback
-    def add_script_run_ctx(thread):  # type: ignore[misc]
+    # Streamlit ≥ 1.12 — re-exported at the scriptrunner package root.
+    from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
+except ImportError:  # pragma: no cover — very old streamlit fallback
+    def add_script_run_ctx(thread, ctx=None):  # type: ignore[misc]
         return thread
+
+    def get_script_run_ctx():  # type: ignore[misc]
+        return None
 
 from vtu_client import VTUClient
 
@@ -102,7 +106,11 @@ def start_prefetch_diaries() -> None:
     evt = threading.Event()
     st.session_state._prefetch_event = evt
     client = st.session_state.vtu_client
-    sess = st.session_state  # safe to capture; Streamlit session_state is per-session
+    sess = st.session_state  # per-session, captured for the thread
+
+    # Capture the parent script's run context so the worker thread can write
+    # to session_state without Streamlit logging "missing ScriptRunContext".
+    ctx = get_script_run_ctx()
 
     def _work() -> None:
         try:
@@ -114,7 +122,8 @@ def start_prefetch_diaries() -> None:
             evt.set()
 
     t = threading.Thread(target=_work, daemon=True, name="vtu-prefetch")
-    add_script_run_ctx(t)
+    if ctx is not None:
+        add_script_run_ctx(t, ctx)
     t.start()
 
 
