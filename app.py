@@ -61,6 +61,63 @@ def inject_styles(hide_sidebar: bool = False) -> None:
           .vtu-sub {{ font-size: 0.88rem; color: var(--vtu-muted); margin-top: 0.25rem; }}
           .vtu-meta {{ margin-top: 0.55rem; }}
 
+          /* Pitch block on landing screen */
+          .vtu-pitch {{
+            border: 1px solid var(--vtu-border);
+            background: var(--vtu-panel);
+            border-radius: 14px;
+            padding: 1.5rem 1.6rem;
+            margin: 1.2rem 0 0 0;
+          }}
+          .vtu-pitch-row {{
+            display: flex; gap: 0.9rem; align-items: flex-start;
+            margin-bottom: 1.1rem;
+          }}
+          .vtu-pitch-icon {{
+            flex: 0 0 auto; width: 36px; height: 36px;
+            border-radius: 10px;
+            background: rgba(59,130,246,0.12);
+            border: 1px solid rgba(59,130,246,0.4);
+            color: var(--vtu-accent); font-weight: 700;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.1rem;
+          }}
+          .vtu-pitch-title {{
+            font-size: 1.1rem; font-weight: 600;
+            color: var(--vtu-text); margin-bottom: 0.35rem;
+            letter-spacing: -0.01em;
+          }}
+          .vtu-pitch-body {{
+            font-size: 0.9rem; line-height: 1.55;
+            color: var(--vtu-muted);
+          }}
+          .vtu-pitch-grid {{
+            display: grid; grid-template-columns: repeat(2, 1fr);
+            gap: 0.7rem; margin: 1rem 0 1.1rem 0;
+          }}
+          .vtu-pitch-card {{
+            border: 1px solid var(--vtu-border);
+            background: var(--vtu-panel2);
+            border-radius: 10px;
+            padding: 0.75rem 0.95rem;
+          }}
+          .vtu-pitch-card-title {{
+            font-size: 0.82rem; font-weight: 600;
+            color: var(--vtu-accent); margin-bottom: 0.2rem;
+            letter-spacing: 0.02em; text-transform: uppercase;
+          }}
+          .vtu-pitch-card-body {{
+            font-size: 0.84rem; color: var(--vtu-text); line-height: 1.45;
+          }}
+          .vtu-pitch-foot {{
+            font-size: 0.78rem; color: var(--vtu-muted);
+            border-top: 1px solid var(--vtu-border);
+            padding-top: 0.85rem; line-height: 1.5;
+          }}
+          @media (max-width: 640px) {{
+            .vtu-pitch-grid {{ grid-template-columns: 1fr; }}
+          }}
+
           /* Tags */
           .tag {{
             display: inline-block; padding: 2px 9px; border-radius: 4px;
@@ -210,6 +267,47 @@ def render_llm_config() -> None:
 
     if not st.session_state.llm_validated:
         st.caption("Enter credentials, then validate to load the model list.")
+        st.markdown(
+            """
+            <div class="vtu-pitch">
+              <div class="vtu-pitch-row">
+                <div class="vtu-pitch-icon">✦</div>
+                <div>
+                  <div class="vtu-pitch-title">Your internship diary, on autopilot.</div>
+                  <div class="vtu-pitch-body">
+                    Stop spending Sunday nights backfilling weeks of diary
+                    entries. Just tell the agent what you worked on — in plain
+                    English — and it writes the entry, picks the right skills,
+                    and submits it to the VTU portal for you.
+                  </div>
+                </div>
+              </div>
+              <div class="vtu-pitch-grid">
+                <div class="vtu-pitch-card">
+                  <div class="vtu-pitch-card-title">Read</div>
+                  <div class="vtu-pitch-card-body">See any range of past entries instantly.</div>
+                </div>
+                <div class="vtu-pitch-card">
+                  <div class="vtu-pitch-card-title">Fill</div>
+                  <div class="vtu-pitch-card-body">Backfill missing days from a single sentence.</div>
+                </div>
+                <div class="vtu-pitch-card">
+                  <div class="vtu-pitch-card-title">Match style</div>
+                  <div class="vtu-pitch-card-body">Generate new entries that sound like yours.</div>
+                </div>
+                <div class="vtu-pitch-card">
+                  <div class="vtu-pitch-card-title">Rewrite</div>
+                  <div class="vtu-pitch-card-body">Update any single day with one prompt.</div>
+                </div>
+              </div>
+              <div class="vtu-pitch-foot">
+                Works with any AI provider you already have an API key for —
+                OpenAI, Groq, Together, OpenRouter, Ollama, and more.
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         return
 
     st.markdown(
