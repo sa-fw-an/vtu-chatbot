@@ -9,17 +9,28 @@ from openai import OpenAI
 from agent import TOOLS, TOOLS_SCHEMA, build_system_message, start_prefetch_diaries
 from config import init_session, reset_auth, reset_llm
 
+# Initialize session before set_page_config so we can decide sidebar state per page.
+init_session()
+client_vtu = st.session_state.vtu_client
+
+if not st.session_state.llm_configured:
+    _page = "llm"
+elif not client_vtu.access_token or not st.session_state.internship_id:
+    _page = "login"
+else:
+    _page = "chat"
+
 st.set_page_config(
     page_title="VTU Diary Agent",
     page_icon=":material/edit_note:",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    # Expanded only on the chat page. Streamlit auto-collapses on phones,
+    # so this gives the laptop user an open sidebar after login while
+    # keeping mobile clean.
+    initial_sidebar_state="expanded" if _page == "chat" else "collapsed",
 )
 
 DEFAULT_MODEL = "gpt-5.4-nano"
-
-init_session()
-client_vtu = st.session_state.vtu_client
 
 
 # ---------------------------------------------------------------------------
