@@ -1,0 +1,9 @@
+.env
+*.local
+venv
+__pycache__/
+*.pyc
+function_app/local.settings.json
+function_app/.python_packages/
+.python_packages/
+.claude/
